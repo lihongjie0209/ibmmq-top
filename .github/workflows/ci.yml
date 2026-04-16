@@ -40,7 +40,7 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: mq-top-linux-amd64
+          name: ibmmq-top-linux-amd64
           path: |
             out/mq_top
             out/mq_top_bundle.tar.gz

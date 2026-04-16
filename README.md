@@ -1,6 +1,6 @@
 <div align="center">
 
-# mq-top
+# ibmmq-top
 
 **`htop` for IBM MQ** — a real-time, interactive terminal UI for monitoring queues, channels, topics, and subscriptions.
 
@@ -8,6 +8,8 @@
 [![IBM MQ](https://img.shields.io/badge/IBM%20MQ-9.x-054ADA?style=flat)](https://www.ibm.com/products/mq)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-linux%2Famd64-lightgrey?style=flat)]()
+[![CI](https://github.com/lihongjie0209/ibmmq-top/actions/workflows/ci.yml/badge.svg)](https://github.com/lihongjie0209/ibmmq-top/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/lihongjie0209/ibmmq-top?style=flat)](https://github.com/lihongjie0209/ibmmq-top/releases/latest)
 
 </div>
 
