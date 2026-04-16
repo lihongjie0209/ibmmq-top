@@ -15,10 +15,12 @@ type filterState struct {
 }
 
 // isSystem reports whether name is a system-defined IBM MQ object.
-// System objects start with "SYSTEM." or "$SYS/".
+// This includes SYSTEM.*, $SYS/, and AMQ.* (internal dynamic queues).
 func isSystem(name string) bool {
 	upper := strings.ToUpper(name)
-	return strings.HasPrefix(upper, "SYSTEM.") || strings.HasPrefix(upper, "$SYS/")
+	return strings.HasPrefix(upper, "SYSTEM.") ||
+		strings.HasPrefix(upper, "$SYS/") ||
+		strings.HasPrefix(upper, "AMQ.")
 }
 
 // matchesFilter reports whether name contains query (case-insensitive).
