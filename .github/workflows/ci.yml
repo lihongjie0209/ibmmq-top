@@ -25,15 +25,25 @@ jobs:
       - name: Verify binary
         run: |
           ldd out/mq_top | grep -E "libmqm_r|libmqe_r"
-          ls -lh out/mq_top out/mq_top_bundle.tar.gz
+          ls -lh out/mq_top out/mq_top_bundle_mq93.tar.gz out/mq_top_bundle_mq94.tar.gz
 
-      - name: Smoke test – bundle on fresh Ubuntu
+      - name: Smoke test – mq93 bundle on fresh Ubuntu
         run: |
           docker run --rm \
             -v "$PWD/out:/mnt/out" \
             ubuntu:22.04 bash -c '
               cd /tmp
-              tar xzf /mnt/out/mq_top_bundle.tar.gz
+              tar xzf /mnt/out/mq_top_bundle_mq93.tar.gz
+              ./mq_top/run.sh --help
+            '
+
+      - name: Smoke test – mq94 bundle on fresh Ubuntu
+        run: |
+          docker run --rm \
+            -v "$PWD/out:/mnt/out" \
+            ubuntu:22.04 bash -c '
+              cd /tmp
+              tar xzf /mnt/out/mq_top_bundle_mq94.tar.gz
               ./mq_top/run.sh --help
             '
 
@@ -43,5 +53,6 @@ jobs:
           name: ibmmq-top-linux-amd64
           path: |
             out/mq_top
-            out/mq_top_bundle.tar.gz
+            out/mq_top_bundle_mq93.tar.gz
+            out/mq_top_bundle_mq94.tar.gz
           retention-days: 7

@@ -99,6 +99,21 @@ chmod +x build.sh && ./build.sh
 
 The output binary lands at `./out/mq_top` (Linux amd64, CGO + MQ Redist Client).
 
+Two portable bundles are also created — no MQ client installation required on the target machine:
+
+| Bundle | MQ Client | Best for |
+|--------|-----------|----------|
+| `out/mq_top_bundle_mq93.tar.gz` | 9.3.0.37 LTS | Connecting to QM 9.2.x / 9.3.x |
+| `out/mq_top_bundle_mq94.tar.gz` | 9.4.5.0 | Connecting to QM 9.4.x (recommended) |
+
+Both bundles detect whether IBM MQ is already installed on the target (`/opt/mqm/lib64`) and skip overriding `LD_LIBRARY_PATH`, so they are safe to use inside MQ Docker containers too.
+
+```bash
+# Extract and run on any Linux machine (no MQ client needed)
+tar xzf out/mq_top_bundle_mq94.tar.gz
+TERM=xterm-256color ./mq_top/run.sh -ibmmq.connName "mqhost(1414)" -ibmmq.queueManager QM1
+```
+
 **Air-gapped / custom Go proxy**
 ```bash
 docker build \

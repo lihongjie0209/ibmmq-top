@@ -30,8 +30,9 @@ jobs:
 
       - name: Rename artifacts with version
         run: |
-          cp out/mq_top          out/mq_top-${{ steps.version.outputs.VERSION }}-linux-amd64
-          cp out/mq_top_bundle.tar.gz  out/mq_top-${{ steps.version.outputs.VERSION }}-linux-amd64-bundle.tar.gz
+          cp out/mq_top                        out/mq_top-${{ steps.version.outputs.VERSION }}-linux-amd64
+          cp out/mq_top_bundle_mq93.tar.gz     out/mq_top-${{ steps.version.outputs.VERSION }}-linux-amd64-bundle-mq93.tar.gz
+          cp out/mq_top_bundle_mq94.tar.gz     out/mq_top-${{ steps.version.outputs.VERSION }}-linux-amd64-bundle-mq94.tar.gz
 
       - name: Generate release notes
         id: notes
@@ -42,15 +43,22 @@ jobs:
           | File | Description |
           |------|-------------|
           | `mq_top-*-linux-amd64` | Standalone binary — requires IBM MQ Client installed on the target machine |
-          | `mq_top-*-linux-amd64-bundle.tar.gz` | **Portable bundle** — includes all IBM MQ runtime libs, no installation needed |
+          | `mq_top-*-bundle-mq93.tar.gz` | **Portable bundle (MQ 9.3.0.37 LTS)** — for connecting to MQ 9.2.x / 9.3.x servers |
+          | `mq_top-*-bundle-mq94.tar.gz` | **Portable bundle (MQ 9.4.5.0 latest)** — recommended for MQ 9.4.x servers |
+
+          ### Choosing a bundle
+
+          - **`bundle-mq93`** — built with MQ 9.3.0.37 LTS client libraries. Most conservative choice; works when connecting to QM 9.2.x or 9.3.x.
+          - **`bundle-mq94`** — built with MQ 9.4.5.0 (latest). Recommended for new deployments.
+          - Both bundles auto-detect whether IBM MQ is already installed (`/opt/mqm/lib64`) and skip overriding `LD_LIBRARY_PATH` so they are safe to run inside MQ containers too.
 
           ### Using the portable bundle
 
           ```bash
           # Extract
-          tar xzf mq_top-*-linux-amd64-bundle.tar.gz
+          tar xzf mq_top-*-bundle-mq94.tar.gz
 
-          # Run (no IBM MQ Client required)
+          # Run (no IBM MQ Client required on this machine)
           TERM=xterm-256color ./mq_top/run.sh \
             -ibmmq.connName "hostname(1414)" \
             -ibmmq.queueManager QM1
@@ -86,4 +94,5 @@ jobs:
           prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}
           files: |
             out/mq_top-${{ steps.version.outputs.VERSION }}-linux-amd64
-            out/mq_top-${{ steps.version.outputs.VERSION }}-linux-amd64-bundle.tar.gz
+            out/mq_top-${{ steps.version.outputs.VERSION }}-linux-amd64-bundle-mq93.tar.gz
+            out/mq_top-${{ steps.version.outputs.VERSION }}-linux-amd64-bundle-mq94.tar.gz
