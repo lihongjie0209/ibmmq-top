@@ -1,0 +1,82 @@
+# Dockerfile.build for mq-top
+# Builds the mq-top binary inside a Linux container with the IBM MQ
+# Redistributable Client libraries (needed for CGO compilation).
+#
+# Usage (Windows):
+#   build.bat
+# Usage (Linux/Mac):
+#   ./build.sh
+
+# Use UBI 8 (glibc 2.28) so the binary runs on ibmcom/mq:9.2.x (RHEL 8)
+# as well as icr.io/ibm-messaging/mq:latest (RHEL 9, glibc 2.34+).
+FROM registry.access.redhat.com/ubi8/ubi-minimal:latest
+
+ARG GOARCH=amd64
+ARG MQARCH=X64
+ARG GO_VERSION=1.22.12
+
+# Install build tools
+RUN microdnf install -y gcc make curl tar gzip bash findutils && microdnf clean all
+
+# Install Go toolchain from the official distribution
+RUN curl -sSfL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
+    | tar -C /usr/local -xz
+ENV PATH="/usr/local/go/bin:${PATH}"
+ENV GOARCH=${GOARCH}
+
+# Go module / toolchain proxy
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
+
+# Download and install IBM MQ Redistributable Client
+ARG RDURL="https://public.dhe.ibm.com/ibmdl/export/pub/software/websphere/messaging/mqdev/redist"
+ENV RDTAR="IBM-MQC-Redist-Linux${MQARCH}.tar.gz" \
+    VRMF=9.4.5.0
+
+ENV genmqpkg_incnls=1 \
+    genmqpkg_incsdk=1 \
+    genmqpkg_inctls=1
+
+RUN mkdir -p /opt/mqm \
+ && cd /opt/mqm \
+ && curl -LO "$RDURL/$VRMF-$RDTAR" \
+ && tar -zxf ./*.tar.gz \
+ && rm -f ./*.tar.gz \
+ && bash bin/genmqpkg.sh -b /opt/mqm
+
+# Set CGO flags so the compiler finds the MQ headers and libraries
+ENV CGO_CFLAGS="-I/opt/mqm/inc/" \
+    CGO_LDFLAGS_ALLOW="-Wl,-rpath.*" \
+    LD_LIBRARY_PATH=/opt/mqm/lib64
+
+WORKDIR /build
+
+# Copy go.mod first to cache dependency downloads as a separate layer
+COPY go.mod go.sum* ./
+RUN go mod download
+
+# Copy the rest of the source
+COPY . .
+
+# Build the binary
+RUN mkdir -p /out \
+ && go mod tidy \
+ && go build -o /out/mq_top ./cmd/mq_top
+
+# Create a portable bundle: binary + MQ runtime libs + launcher script
+# The launcher sets LD_LIBRARY_PATH so the binary works without an MQ client installed.
+RUN BUNDLE=/out/bundle/mq_top \
+ && mkdir -p "$BUNDLE/lib64" "$BUNDLE/gskit9/lib64" \
+ # Copy the binary
+ && cp /out/mq_top "$BUNDLE/mq_top" \
+ # Copy all IBM MQ shared libraries
+ && cp /opt/mqm/lib64/libmq*.so "$BUNDLE/lib64/" \
+ # Copy GSKit TLS libraries (needed for TLS-enabled queue manager connections)
+ && cp /opt/mqm/gskit9/lib64/*.so "$BUNDLE/gskit9/lib64/" 2>/dev/null || true \
+ # Create launcher script
+ && printf '#!/bin/sh\nDIR="$(cd "$(dirname "$0")" && pwd)"\nexport LD_LIBRARY_PATH="$DIR/lib64:$DIR/gskit9/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\nexec "$DIR/mq_top" "$@"\n' > "$BUNDLE/run.sh" \
+ && chmod +x "$BUNDLE/run.sh" \
+ # Package as tar.gz
+ && tar -czf /out/mq_top_bundle.tar.gz -C /out/bundle .
+
+CMD ["sh", "-c", "cp /out/mq_top /go/out/ && cp /out/mq_top_bundle.tar.gz /go/out/ && echo 'Build successful:' && echo '  /go/out/mq_top             (standalone binary - needs MQ client installed)' && echo '  /go/out/mq_top_bundle.tar.gz (portable bundle - no MQ client required)'"]

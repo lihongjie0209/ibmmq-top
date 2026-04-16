@@ -1,0 +1,11 @@
+# Build outputs
+out/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

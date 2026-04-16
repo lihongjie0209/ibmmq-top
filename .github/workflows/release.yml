@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker builder image
+        run: docker build -t mq-top-builder -f Dockerfile.build .
+
+      - name: Compile binary and bundle
+        run: |
+          mkdir -p out
+          docker run --rm -v "$PWD/out:/go/out" mq-top-builder
+
+      - name: Rename artifacts with version
+        run: |
+          cp out/mq_top          out/mq_top-${{ steps.version.outputs.VERSION }}-linux-amd64
+          cp out/mq_top_bundle.tar.gz  out/mq_top-${{ steps.version.outputs.VERSION }}-linux-amd64-bundle.tar.gz
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          cat <<'EOF' > release_notes.md
+          ## Assets
+
+          | File | Description |
+          |------|-------------|
+          | `mq_top-*-linux-amd64` | Standalone binary — requires IBM MQ Client installed on the target machine |
+          | `mq_top-*-linux-amd64-bundle.tar.gz` | **Portable bundle** — includes all IBM MQ runtime libs, no installation needed |
+
+          ### Using the portable bundle
+
+          ```bash
+          # Extract
+          tar xzf mq_top-*-linux-amd64-bundle.tar.gz
+
+          # Run (no IBM MQ Client required)
+          TERM=xterm-256color ./mq_top/run.sh \
+            -ibmmq.connName "hostname(1414)" \
+            -ibmmq.queueManager QM1
+
+          # Demo mode (no MQ connection at all)
+          ./mq_top/run.sh -demo
+          ```
+
+          ### Using the standalone binary
+
+          ```bash
+          # In an IBM MQ Docker container
+          docker cp mq_top-*-linux-amd64 <container>:/tmp/mq_top
+          docker exec -u 0 <container> chmod +x /tmp/mq_top
+          docker exec -it <container> sh -c 'TERM=xterm-256color /tmp/mq_top'
+          ```
+
+          ### Compatibility
+
+          | IBM MQ Version | Base OS | Status |
+          |----------------|---------|--------|
+          | 9.2.0.0 – 9.2.3.x | RHEL 8 (glibc 2.28) | ✅ |
+          | 9.3.x / latest | RHEL 9 (glibc 2.34) | ✅ |
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          name: mq-top ${{ steps.version.outputs.VERSION }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}
+          files: |
+            out/mq_top-${{ steps.version.outputs.VERSION }}-linux-amd64
+            out/mq_top-${{ steps.version.outputs.VERSION }}-linux-amd64-bundle.tar.gz

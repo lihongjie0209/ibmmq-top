@@ -1,0 +1,7 @@
+# Normalize line endings
+* text=auto
+
+# Force LF for shell scripts
+*.sh text eol=lf
+Dockerfile* text eol=lf
+.github/workflows/*.yml text eol=lf
