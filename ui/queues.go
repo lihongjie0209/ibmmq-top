@@ -108,16 +108,17 @@ return !less
 	rows := make([][]string, 0, len(sorted))
 	for _, q := range sorted {
 		if q.QType == "REMOTE" {
-			remoteLabel := "→" + q.RemoteQMgr
-			if q.RemoteQMgr == "" {
-				remoteLabel = "→(passthrough)"
+			// Usage column: show XmitQueue name (the transmission queue routing target)
+			xmitLabel := "→" + q.XmitQueue
+			if q.XmitQueue == "" {
+				xmitLabel = "→(passthrough)"
 			}
 			rows = append(rows, []string{
 				nameStyle.Render(q.Name),
 				queueTypeCell(q.QType),
 				dimStyle.Render("—"),
 				dimStyle.Render("—"),
-				remoteQStyle.Render(remoteLabel),
+				remoteQStyle.Render(xmitLabel),
 				dimStyle.Render("—"),
 				dimStyle.Render("—"),
 				dimStyle.Render("—"),
@@ -127,6 +128,11 @@ return !less
 			continue
 		}
 		p := pct(q.Depth, q.MaxDepth)
+		// XMIT queues: show channel name in MsgAge column (more actionable than oldest-msg age)
+		msgAgeCell := dimStyle.Render(fmtMsgAge(q.MsgAge))
+		if q.QType == "XMIT" && q.ChannelName != "" {
+			msgAgeCell = xmitqStyle.Render(truncate(q.ChannelName, 8))
+		}
 		rows = append(rows, []string{
 			nameStyle.Render(q.Name),
 			queueTypeCell(q.QType),
@@ -135,7 +141,7 @@ return !less
 			renderUsageBar(p, 10), // 10 bar chars + " 99.9%" = 17 visual chars
 			dimStyle.Render(fmt.Sprintf("%d", q.InputHandles)),
 			dimStyle.Render(fmt.Sprintf("%d", q.OutputHandles)),
-			dimStyle.Render(fmtMsgAge(q.MsgAge)),
+			msgAgeCell,
 			rateStyle.Render(fmt.Sprintf("%d", q.PutRate)),
 			rateStyle.Render(fmt.Sprintf("%d", q.GetRate)),
 		})
@@ -203,7 +209,7 @@ func (m *queuesModel) detailData() (string, [][2]string) {
 	}
 	p := pct(q.Depth, q.MaxDepth)
 	qType := "LOCAL"
-	if q.IsXmitQ {
+	if q.QType == "XMIT" {
 		qType = "TRANSMISSION (XMIT)"
 	}
 	rows := [][2]string{
@@ -217,6 +223,9 @@ func (m *queuesModel) detailData() (string, [][2]string) {
 		{"Oldest Message", fmtMsgAge(q.MsgAge)},
 		{"Put Rate", fmt.Sprintf("%d/s", q.PutRate)},
 		{"Get Rate", fmt.Sprintf("%d/s", q.GetRate)},
+	}
+	if q.QType == "XMIT" && q.ChannelName != "" {
+		rows = append(rows, [2]string{"Sender Channel", q.ChannelName})
 	}
 	return "Queue Detail", rows
 }

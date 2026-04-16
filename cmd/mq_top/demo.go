@@ -43,6 +43,8 @@ func runDemo(app *ui.App, interval time.Duration) {
 		{Name: "PAYMENT.TO.QM3", QType: "REMOTE", RemoteName: "PAYMENT.EVENTS.QUEUE", RemoteQMgr: "QM3", XmitQueue: "TO.QM3"},
 		{Name: "PASSTHROUGH.Q", QType: "REMOTE", RemoteName: "APP.IN.QUEUE", RemoteQMgr: "", XmitQueue: ""},
 	}
+	// Channel names for XMIT queues (index matches queueNames/queueXmitQ)
+	queueChannel := []string{"", "", "", "", "", "", "", "", "", "", "", "", "", "", "TO.QM2.SDR"}
 
 	channelNames := []string{
 		"TO.QM2",
@@ -96,6 +98,7 @@ func runDemo(app *ui.App, interval time.Duration) {
 					}
 					return "LOCAL"
 				}(),
+				ChannelName: queueChannel[i],
 			}
 		}
 		queues = append(queues, remoteQueues...)

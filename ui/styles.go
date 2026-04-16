@@ -126,3 +126,15 @@ return hi
 }
 return v
 }
+
+// truncate shortens s to at most n runes, appending "…" if needed.
+func truncate(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	if n <= 1 {
+		return "…"
+	}
+	return string(runes[:n-1]) + "…"
+}

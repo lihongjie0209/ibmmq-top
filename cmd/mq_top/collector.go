@@ -43,6 +43,7 @@ type QueueInfo struct {
 	RemoteName    string // RNAME  (for REMOTE queues)
 	RemoteQMgr    string // RQMNAME (for REMOTE queues)
 	XmitQueue     string // XMITQ  (for REMOTE queues)
+	ChannelName   string // sender channel that drains this XMIT queue
 }
 
 type ChannelInfo struct {
@@ -458,6 +459,129 @@ func collectRemoteQueueDefs(cfg Config, snap *Snapshot) {
 			continue
 		}
 		inquireRemoteQueues(pattern, cmdQObj, replyQObj, snap)
+	}
+
+	// Build xmitQ → channel name map by querying SDR and CLUSSDR channels.
+	xmitToChannel := inquireSenderChannels(cmdQObj, replyQObj)
+	for i := range snap.Queues {
+		if snap.Queues[i].QType == "XMIT" {
+			if ch, ok := xmitToChannel[snap.Queues[i].Name]; ok {
+				snap.Queues[i].ChannelName = ch
+			}
+		}
+	}
+}
+
+// inquireSenderChannels uses PCF MQCMD_INQUIRE_CHANNEL to get SDR/CLUSSDR channels and their
+// XMITQ attribute. Returns a map of xmitQueueName → channelName.
+func inquireSenderChannels(cmdQObj ibmmq.MQObject, replyQObj ibmmq.MQObject) map[string]string {
+	result := make(map[string]string)
+	for _, chtType := range []int32{ibmmq.MQCHT_SENDER, ibmmq.MQCHT_CLUSSDR} {
+		inquireSenderChannelType(int64(chtType), cmdQObj, replyQObj, result)
+	}
+	return result
+}
+
+func inquireSenderChannelType(chtType int64, cmdQObj ibmmq.MQObject, replyQObj ibmmq.MQObject, result map[string]string) {
+	cfh := ibmmq.NewMQCFH()
+	cfh.Version = ibmmq.MQCFH_VERSION_3
+	cfh.Type = ibmmq.MQCFT_COMMAND_XR
+	cfh.Command = ibmmq.MQCMD_INQUIRE_CHANNEL
+	cfh.ParameterCount = 0
+
+	buf := make([]byte, 0)
+
+	// Channel name filter: all channels of this type
+	pcfparm := new(ibmmq.PCFParameter)
+	pcfparm.Type = ibmmq.MQCFT_STRING
+	pcfparm.Parameter = ibmmq.MQCACH_CHANNEL_NAME
+	pcfparm.String = []string{"*"}
+	cfh.ParameterCount++
+	buf = append(buf, pcfparm.Bytes()...)
+
+	// Channel type filter
+	pcfparm = new(ibmmq.PCFParameter)
+	pcfparm.Type = ibmmq.MQCFT_INTEGER
+	pcfparm.Parameter = ibmmq.MQIACH_CHANNEL_TYPE
+	pcfparm.Int64Value = []int64{chtType}
+	cfh.ParameterCount++
+	buf = append(buf, pcfparm.Bytes()...)
+
+	buf = append(cfh.Bytes(), buf...)
+
+	putmqmd := ibmmq.NewMQMD()
+	putmqmd.Format = "MQADMIN"
+	putmqmd.ReplyToQ = replyQObj.Name
+	putmqmd.MsgType = ibmmq.MQMT_REQUEST
+	putmqmd.Report = ibmmq.MQRO_PASS_DISCARD_AND_EXPIRY
+	putmqmd.Expiry = 150
+
+	pmo := ibmmq.NewMQPMO()
+	pmo.Options = ibmmq.MQPMO_NO_SYNCPOINT | ibmmq.MQPMO_NEW_MSG_ID | ibmmq.MQPMO_NEW_CORREL_ID | ibmmq.MQPMO_FAIL_IF_QUIESCING
+
+	if err := cmdQObj.Put(putmqmd, pmo, buf); err != nil {
+		log.Debugf("inquireSenderChannels: PCF put: %v", err)
+		return
+	}
+
+	correlId := putmqmd.MsgId
+	for {
+		replyBuf := make([]byte, 65536)
+		getmqmd := ibmmq.NewMQMD()
+		gmo := ibmmq.NewMQGMO()
+		gmo.Options = ibmmq.MQGMO_NO_SYNCPOINT | ibmmq.MQGMO_FAIL_IF_QUIESCING | ibmmq.MQGMO_WAIT | ibmmq.MQGMO_CONVERT
+		gmo.WaitInterval = 3000
+		gmo.MatchOptions = ibmmq.MQMO_MATCH_CORREL_ID
+		gmo.Version = ibmmq.MQGMO_VERSION_2
+		getmqmd.CorrelId = correlId
+
+		datalen, err := replyQObj.Get(getmqmd, gmo, replyBuf)
+		if err != nil {
+			if mqErr, ok := err.(*ibmmq.MQReturn); !ok || mqErr.MQRC != ibmmq.MQRC_NO_MSG_AVAILABLE {
+				log.Debugf("inquireSenderChannels: get: %v", err)
+			}
+			break
+		}
+
+		cfhReply, offset := ibmmq.ReadPCFHeader(replyBuf[:datalen])
+		isDone := cfhReply != nil && cfhReply.Control == ibmmq.MQCFC_LAST
+		if cfhReply != nil && cfhReply.Reason == ibmmq.MQRC_NONE && offset < datalen {
+			parseSenderChannelResponse(cfhReply, replyBuf[offset:datalen], result)
+		}
+		if isDone {
+			break
+		}
+	}
+}
+
+func parseSenderChannelResponse(cfh *ibmmq.MQCFH, buf []byte, result map[string]string) {
+	if cfh == nil || cfh.ParameterCount == 0 {
+		return
+	}
+	var chName, xmitQ string
+	offset := 0
+	datalen := len(buf)
+	parmCount := int(cfh.ParameterCount)
+
+	for i := 0; i < parmCount && offset < datalen; i++ {
+		elem, bytesRead := ibmmq.ReadPCFParameter(buf[offset:])
+		if elem == nil || bytesRead == 0 {
+			break
+		}
+		offset += bytesRead
+		switch elem.Parameter {
+		case ibmmq.MQCACH_CHANNEL_NAME:
+			if len(elem.String) > 0 {
+				chName = strings.TrimSpace(elem.String[0])
+			}
+		case ibmmq.MQCACH_XMIT_Q_NAME:
+			if len(elem.String) > 0 {
+				xmitQ = strings.TrimSpace(elem.String[0])
+			}
+		}
+	}
+	if chName != "" && xmitQ != "" {
+		result[xmitQ] = chName
 	}
 }
 

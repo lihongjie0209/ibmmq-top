@@ -37,6 +37,7 @@ type QueueInfo struct {
 	RemoteName    string // RNAME  (for REMOTE queues)
 	RemoteQMgr    string // RQMNAME (for REMOTE queues)
 	XmitQueue     string // XMITQ  (for REMOTE queues)
+	ChannelName   string // sender channel that drains this XMIT queue
 }
 
 type ChannelInfo struct {
