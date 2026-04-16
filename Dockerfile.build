@@ -74,7 +74,7 @@ RUN BUNDLE=/out/bundle/mq_top \
  # Copy GSKit TLS libraries (needed for TLS-enabled queue manager connections)
  && cp /opt/mqm/gskit9/lib64/*.so "$BUNDLE/gskit9/lib64/" 2>/dev/null || true \
  # Create launcher script
- && printf '#!/bin/sh\nDIR="$(cd "$(dirname "$0")" && pwd)"\nexport LD_LIBRARY_PATH="$DIR/lib64:$DIR/gskit9/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\nexec "$DIR/mq_top" "$@"\n' > "$BUNDLE/run.sh" \
+ && printf '#!/bin/sh\nDIR="$(cd "$(dirname "$0")" && pwd)"\n# Only use bundled libs when IBM MQ Client is not already installed on this machine.\n# If /opt/mqm/lib64 exists the binary will find its libs via the embedded RPATH.\nif [ ! -d "/opt/mqm/lib64" ]; then\n  export LD_LIBRARY_PATH="$DIR/lib64:$DIR/gskit9/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\nfi\nexec "$DIR/mq_top" "$@"\n' > "$BUNDLE/run.sh" \
  && chmod +x "$BUNDLE/run.sh" \
  # Package as tar.gz
  && tar -czf /out/mq_top_bundle.tar.gz -C /out/bundle .
