@@ -107,20 +107,39 @@ return !less
 	m.sorted = sorted // save for detail lookup
 	rows := make([][]string, 0, len(sorted))
 	for _, q := range sorted {
-p := pct(q.Depth, q.MaxDepth)
-rows = append(rows, []string{
-nameStyle.Render(q.Name),
-queueTypeCell(q.IsXmitQ),
-depthColor(p).Render(fmt.Sprintf("%d", q.Depth)),
-dimStyle.Render(fmt.Sprintf("%d", q.MaxDepth)),
-renderUsageBar(p, 10), // 10 bar chars + " 99.9%" = 17 visual chars
-dimStyle.Render(fmt.Sprintf("%d", q.InputHandles)),
-dimStyle.Render(fmt.Sprintf("%d", q.OutputHandles)),
-dimStyle.Render(fmtMsgAge(q.MsgAge)),
-rateStyle.Render(fmt.Sprintf("%d", q.PutRate)),
-rateStyle.Render(fmt.Sprintf("%d", q.GetRate)),
-})
-}
+		if q.QType == "REMOTE" {
+			remoteLabel := "→" + q.RemoteQMgr
+			if q.RemoteQMgr == "" {
+				remoteLabel = "→(passthrough)"
+			}
+			rows = append(rows, []string{
+				nameStyle.Render(q.Name),
+				queueTypeCell(q.QType),
+				dimStyle.Render("—"),
+				dimStyle.Render("—"),
+				remoteQStyle.Render(remoteLabel),
+				dimStyle.Render("—"),
+				dimStyle.Render("—"),
+				dimStyle.Render("—"),
+				dimStyle.Render("—"),
+				dimStyle.Render("—"),
+			})
+			continue
+		}
+		p := pct(q.Depth, q.MaxDepth)
+		rows = append(rows, []string{
+			nameStyle.Render(q.Name),
+			queueTypeCell(q.QType),
+			depthColor(p).Render(fmt.Sprintf("%d", q.Depth)),
+			dimStyle.Render(fmt.Sprintf("%d", q.MaxDepth)),
+			renderUsageBar(p, 10), // 10 bar chars + " 99.9%" = 17 visual chars
+			dimStyle.Render(fmt.Sprintf("%d", q.InputHandles)),
+			dimStyle.Render(fmt.Sprintf("%d", q.OutputHandles)),
+			dimStyle.Render(fmtMsgAge(q.MsgAge)),
+			rateStyle.Render(fmt.Sprintf("%d", q.PutRate)),
+			rateStyle.Render(fmt.Sprintf("%d", q.GetRate)),
+		})
+	}
 
 t := newSimpleTable(cols, rows, m.height-2)
 // Restore cursor — clamp to valid range
@@ -154,12 +173,15 @@ return fmt.Sprintf("%dh%dm", secs/3600, (secs%3600)/60)
 }
 
 // queueTypeCell renders a short colored type badge.
-// Transmission queues (XmitQ) are shown in cyan; local queues are dim.
-func queueTypeCell(isXmitQ bool) string {
-if isXmitQ {
-return xmitqStyle.Render("XMIT")
-}
-return dimStyle.Render("LOCAL")
+func queueTypeCell(qType string) string {
+	switch qType {
+	case "XMIT":
+		return xmitqStyle.Render("XMIT")
+	case "REMOTE":
+		return remoteQStyle.Render("REM")
+	default:
+		return dimStyle.Render("LOCAL")
+	}
 }
 
 // detailData returns the title and field rows for the currently selected queue.
@@ -169,6 +191,16 @@ func (m *queuesModel) detailData() (string, [][2]string) {
 		return "Queue Detail", [][2]string{{"Info", "No row selected"}}
 	}
 	q := m.sorted[c]
+	if q.QType == "REMOTE" {
+		rows := [][2]string{
+			{"Name", q.Name},
+			{"Type", "REMOTE"},
+			{"Remote Queue (RNAME)", q.RemoteName},
+			{"Remote QMgr (RQMNAME)", q.RemoteQMgr},
+			{"Xmit Queue (XMITQ)", q.XmitQueue},
+		}
+		return "Queue Detail", rows
+	}
 	p := pct(q.Depth, q.MaxDepth)
 	qType := "LOCAL"
 	if q.IsXmitQ {

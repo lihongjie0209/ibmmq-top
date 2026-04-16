@@ -37,6 +37,13 @@ func runDemo(app *ui.App, interval time.Duration) {
 	// true = transmission (XmitQ) queue
 	queueXmitQ := []bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, true}
 
+	// Remote queue definitions (static — no depth/rate metrics)
+	remoteQueues := []ui.QueueInfo{
+		{Name: "ORDER.TO.QM2", QType: "REMOTE", RemoteName: "ORDER.PROCESSING.QUEUE", RemoteQMgr: "QM2", XmitQueue: "TO.QM2"},
+		{Name: "PAYMENT.TO.QM3", QType: "REMOTE", RemoteName: "PAYMENT.EVENTS.QUEUE", RemoteQMgr: "QM3", XmitQueue: "TO.QM3"},
+		{Name: "PASSTHROUGH.Q", QType: "REMOTE", RemoteName: "APP.IN.QUEUE", RemoteQMgr: "", XmitQueue: ""},
+	}
+
 	channelNames := []string{
 		"TO.QM2",
 		"FROM.QM2",
@@ -83,8 +90,15 @@ func runDemo(app *ui.App, interval time.Duration) {
 				PutRate:       put,
 				GetRate:       get,
 				IsXmitQ:       queueXmitQ[i],
+				QType: func() string {
+					if queueXmitQ[i] {
+						return "XMIT"
+					}
+					return "LOCAL"
+				}(),
 			}
 		}
+		queues = append(queues, remoteQueues...)
 
 		// ── Channels ──────────────────────────────────────────────────────────
 		channels := make([]ui.ChannelInfo, len(channelNames))

@@ -33,6 +33,10 @@ type QueueInfo struct {
 	PutRate       int64
 	GetRate       int64
 	IsXmitQ       bool   // true when MQIA_USAGE = MQUS_TRANSMISSION
+	QType         string // "LOCAL", "XMIT", or "REMOTE"
+	RemoteName    string // RNAME  (for REMOTE queues)
+	RemoteQMgr    string // RQMNAME (for REMOTE queues)
+	XmitQueue     string // XMITQ  (for REMOTE queues)
 }
 
 type ChannelInfo struct {

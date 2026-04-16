@@ -39,6 +39,10 @@ type QueueInfo struct {
 	PutRate       int64
 	GetRate       int64
 	IsXmitQ       bool   // true when MQIA_USAGE = MQUS_TRANSMISSION
+	QType         string // "LOCAL", "XMIT", or "REMOTE"
+	RemoteName    string // RNAME  (for REMOTE queues)
+	RemoteQMgr    string // RQMNAME (for REMOTE queues)
+	XmitQueue     string // XMITQ  (for REMOTE queues)
 }
 
 type ChannelInfo struct {
@@ -93,6 +97,7 @@ func collect(cfg Config) Snapshot {
 		return snap
 	}
 	collectQueues(cfg, &snap)
+	collectRemoteQueueDefs(cfg, &snap)
 	collectChannels(cfg, &snap)
 	collectTopics(cfg, &snap)
 	collectSubs(cfg, &snap)
@@ -180,6 +185,11 @@ func collectQueues(cfg Config, snap *Snapshot) {
 		q.PutRate = int64Val(attrs, mqmetric.ATTR_Q_INTERVAL_PUT, key)
 		q.GetRate = int64Val(attrs, mqmetric.ATTR_Q_INTERVAL_GET, key)
 		q.IsXmitQ = int64Val(attrs, mqmetric.ATTR_Q_USAGE, key) == int64(ibmmq.MQUS_TRANSMISSION)
+		if q.IsXmitQ {
+			q.QType = "XMIT"
+		} else {
+			q.QType = "LOCAL"
+		}
 		snap.Queues = append(snap.Queues, q)
 	}
 }
@@ -389,4 +399,187 @@ func subTypeString(subType int) string {
 		return "UNKNOWN"
 	}
 	return s
+}
+
+// collectRemoteQueueDefs uses a direct PCF INQUIRE_Q to discover QREMOTE definitions
+// and appends them to snap.Queues. QREMOTE queues have no runtime depth — only routing metadata.
+func collectRemoteQueueDefs(cfg Config, snap *Snapshot) {
+	var qMgr ibmmq.MQQueueManager
+	var err error
+
+	if cfg.channel != "" && cfg.connName != "" {
+		cno := ibmmq.NewMQCNO()
+		cno.Options |= ibmmq.MQCNO_CLIENT_BINDING
+		cd := ibmmq.NewMQCD()
+		cd.ChannelName = cfg.channel
+		cd.ConnectionName = cfg.connName
+		cno.ClientConn = cd
+		if cfg.userId != "" {
+			csp := ibmmq.NewMQCSP()
+			csp.UserId = cfg.userId
+			csp.Password = cfg.password
+			cno.SecurityParms = csp
+		}
+		qMgr, err = ibmmq.Connx(cfg.QMgrName, cno)
+	} else {
+		qMgr, err = ibmmq.Conn(cfg.QMgrName)
+	}
+	if err != nil {
+		log.Debugf("collectRemoteQueueDefs: connect: %v", err)
+		return
+	}
+	defer qMgr.Disc()
+
+	cmdQD := ibmmq.NewMQOD()
+	cmdQD.ObjectName = "SYSTEM.ADMIN.COMMAND.QUEUE"
+	cmdQD.ObjectType = ibmmq.MQOT_Q
+	cmdQObj, err := qMgr.Open(cmdQD, ibmmq.MQOO_OUTPUT)
+	if err != nil {
+		log.Debugf("collectRemoteQueueDefs: open cmd Q: %v", err)
+		return
+	}
+	defer cmdQObj.Close(0)
+
+	replyQD := ibmmq.NewMQOD()
+	replyQD.ObjectName = "SYSTEM.DEFAULT.MODEL.QUEUE"
+	replyQD.DynamicQName = "MQTOP.REPLY.*"
+	replyQD.ObjectType = ibmmq.MQOT_Q
+	replyQObj, err := qMgr.Open(replyQD, ibmmq.MQOO_INPUT_EXCLUSIVE)
+	if err != nil {
+		log.Debugf("collectRemoteQueueDefs: open reply Q: %v", err)
+		return
+	}
+	defer replyQObj.Close(0)
+
+	patterns := strings.Split(cfg.MonitoredQueues, ",")
+	for _, rawPattern := range patterns {
+		pattern := strings.TrimSpace(rawPattern)
+		if pattern == "" {
+			continue
+		}
+		inquireRemoteQueues(pattern, cmdQObj, replyQObj, snap)
+	}
+}
+
+func inquireRemoteQueues(pattern string, cmdQObj ibmmq.MQObject, replyQObj ibmmq.MQObject, snap *Snapshot) {
+	cfh := ibmmq.NewMQCFH()
+	cfh.Version = ibmmq.MQCFH_VERSION_3
+	cfh.Type = ibmmq.MQCFT_COMMAND_XR
+	cfh.Command = ibmmq.MQCMD_INQUIRE_Q
+	cfh.ParameterCount = 0
+
+	buf := make([]byte, 0)
+
+	pcfparm := new(ibmmq.PCFParameter)
+	pcfparm.Type = ibmmq.MQCFT_STRING
+	pcfparm.Parameter = ibmmq.MQCA_Q_NAME
+	pcfparm.String = []string{pattern}
+	cfh.ParameterCount++
+	buf = append(buf, pcfparm.Bytes()...)
+
+	pcfparm = new(ibmmq.PCFParameter)
+	pcfparm.Type = ibmmq.MQCFT_INTEGER
+	pcfparm.Parameter = ibmmq.MQIA_Q_TYPE
+	pcfparm.Int64Value = []int64{int64(ibmmq.MQQT_REMOTE)}
+	cfh.ParameterCount++
+	buf = append(buf, pcfparm.Bytes()...)
+
+	pcfparm = new(ibmmq.PCFParameter)
+	pcfparm.Type = ibmmq.MQCFT_INTEGER_LIST
+	pcfparm.Parameter = ibmmq.MQIACF_Q_ATTRS
+	pcfparm.Int64Value = []int64{
+		int64(ibmmq.MQCA_Q_NAME),
+		int64(ibmmq.MQIA_Q_TYPE),
+		int64(ibmmq.MQCA_REMOTE_Q_NAME),
+		int64(ibmmq.MQCA_REMOTE_Q_MGR_NAME),
+		int64(ibmmq.MQCA_XMIT_Q_NAME),
+	}
+	cfh.ParameterCount++
+	buf = append(buf, pcfparm.Bytes()...)
+
+	buf = append(cfh.Bytes(), buf...)
+
+	putmqmd := ibmmq.NewMQMD()
+	putmqmd.Format = "MQADMIN"
+	putmqmd.ReplyToQ = replyQObj.Name
+	putmqmd.MsgType = ibmmq.MQMT_REQUEST
+	putmqmd.Report = ibmmq.MQRO_PASS_DISCARD_AND_EXPIRY
+	putmqmd.Expiry = 150 // 15 seconds (tenths)
+
+	pmo := ibmmq.NewMQPMO()
+	pmo.Options = ibmmq.MQPMO_NO_SYNCPOINT | ibmmq.MQPMO_NEW_MSG_ID | ibmmq.MQPMO_NEW_CORREL_ID | ibmmq.MQPMO_FAIL_IF_QUIESCING
+
+	if err := cmdQObj.Put(putmqmd, pmo, buf); err != nil {
+		log.Debugf("inquireRemoteQueues: PCF put: %v", err)
+		return
+	}
+
+	correlId := putmqmd.MsgId
+	for {
+		replyBuf := make([]byte, 65536)
+		getmqmd := ibmmq.NewMQMD()
+		gmo := ibmmq.NewMQGMO()
+		gmo.Options = ibmmq.MQGMO_NO_SYNCPOINT | ibmmq.MQGMO_FAIL_IF_QUIESCING | ibmmq.MQGMO_WAIT | ibmmq.MQGMO_CONVERT
+		gmo.WaitInterval = 3000
+		gmo.MatchOptions = ibmmq.MQMO_MATCH_CORREL_ID
+		gmo.Version = ibmmq.MQGMO_VERSION_2
+		getmqmd.CorrelId = correlId
+
+		datalen, err := replyQObj.Get(getmqmd, gmo, replyBuf)
+		if err != nil {
+			if mqErr, ok := err.(*ibmmq.MQReturn); !ok || mqErr.MQRC != ibmmq.MQRC_NO_MSG_AVAILABLE {
+				log.Debugf("inquireRemoteQueues: get: %v", err)
+			}
+			break
+		}
+
+		cfhReply, offset := ibmmq.ReadPCFHeader(replyBuf[:datalen])
+		isDone := cfhReply != nil && cfhReply.Control == ibmmq.MQCFC_LAST
+		if cfhReply != nil && cfhReply.Reason == ibmmq.MQRC_NONE && offset < datalen {
+			parseRemoteQueueResponse(cfhReply, replyBuf[offset:datalen], snap)
+		}
+		if isDone {
+			break
+		}
+	}
+}
+
+func parseRemoteQueueResponse(cfh *ibmmq.MQCFH, buf []byte, snap *Snapshot) {
+	if cfh == nil || cfh.ParameterCount == 0 {
+		return
+	}
+	q := QueueInfo{QType: "REMOTE"}
+	offset := 0
+	datalen := len(buf)
+	parmCount := int(cfh.ParameterCount)
+
+	for i := 0; i < parmCount && offset < datalen; i++ {
+		elem, bytesRead := ibmmq.ReadPCFParameter(buf[offset:])
+		if elem == nil || bytesRead == 0 {
+			break
+		}
+		offset += bytesRead
+		switch elem.Parameter {
+		case ibmmq.MQCA_Q_NAME:
+			if len(elem.String) > 0 {
+				q.Name = strings.TrimSpace(elem.String[0])
+			}
+		case ibmmq.MQCA_REMOTE_Q_NAME:
+			if len(elem.String) > 0 {
+				q.RemoteName = strings.TrimSpace(elem.String[0])
+			}
+		case ibmmq.MQCA_REMOTE_Q_MGR_NAME:
+			if len(elem.String) > 0 {
+				q.RemoteQMgr = strings.TrimSpace(elem.String[0])
+			}
+		case ibmmq.MQCA_XMIT_Q_NAME:
+			if len(elem.String) > 0 {
+				q.XmitQueue = strings.TrimSpace(elem.String[0])
+			}
+		}
+	}
+
+	if q.Name != "" {
+		snap.Queues = append(snap.Queues, q)
+	}
 }
