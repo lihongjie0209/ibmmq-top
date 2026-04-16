@@ -61,6 +61,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// When active panel is in search mode, forward ALL keys to it.
+		// Only ctrl+c can still quit.
+		if m.activeIsSearching() {
+			if msg.String() == "ctrl+c" {
+				return m, tea.Quit
+			}
+			m.scrollDir = 0
+			var cmd tea.Cmd
+			switch m.activeTab {
+			case 0:
+				m.queues, cmd = m.queues.Update(msg)
+			case 1:
+				m.channels, cmd = m.channels.Update(msg)
+			case 2:
+				m.topics, cmd = m.topics.Update(msg)
+			case 3:
+				m.subs, cmd = m.subs.Update(msg)
+			}
+			return m, cmd
+		}
+
 		switch msg.String() {
 		case "q", "Q", "ctrl+c":
 			return m, tea.Quit
@@ -142,6 +163,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// activeIsSearching returns true when the currently visible tab's search bar is open.
+func (m *model) activeIsSearching() bool {
+	switch m.activeTab {
+	case 0:
+		return m.queues.filter.searching
+	case 1:
+		return m.channels.filter.searching
+	case 2:
+		return m.topics.filter.searching
+	case 3:
+		return m.subs.filter.searching
+	}
+	return false
+}
+
+// activeHideSystem returns whether the active tab is hiding system objects.
+func (m *model) activeHideSystem() bool {
+	switch m.activeTab {
+	case 0:
+		return m.queues.filter.hideSystem
+	case 1:
+		return m.channels.filter.hideSystem
+	case 2:
+		return m.topics.filter.hideSystem
+	case 3:
+		return m.subs.filter.hideSystem
+	}
+	return false
+}
+
 // startScrollTick schedules the next scroll tick if one isn't already pending.
 func (m *model) startScrollTick() tea.Cmd {
 	if m.scrollTick {
@@ -171,7 +222,7 @@ func (m model) View() string {
 	}
 	header := buildHeader(m.snap, m.width)
 	tabBar := buildTabBar(m.activeTab, m.width)
-	footer := buildFooter(m.width)
+	footer := buildFooter(m.width, m.activeHideSystem())
 	if m.showDetail {
 		contentH := m.contentHeight()
 		overlay := m.activeDetailView(contentH)
@@ -192,7 +243,7 @@ func (m *model) contentHeight() int {
 	}
 	header := buildHeader(m.snap, m.width)
 	tabBar := buildTabBar(m.activeTab, m.width)
-	footer := buildFooter(m.width)
+	footer := buildFooter(m.width, m.activeHideSystem())
 	fixed := strings.Count(header, "\n") + 1 +
 		strings.Count(tabBar, "\n") + 1 +
 		strings.Count(footer, "\n") + 1

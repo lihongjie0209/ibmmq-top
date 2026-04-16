@@ -15,35 +15,45 @@ subSortCols
 )
 
 type subsModel struct {
-tbl     simpleTable
-data    []SubInfo
-sorted  []SubInfo // mirrors last rendered row order for detail lookup
-sortCol int
-sortAsc bool
-width   int
-height  int
+	tbl     simpleTable
+	data    []SubInfo
+	sorted  []SubInfo // mirrors last rendered row order for detail lookup
+	sortCol int
+	sortAsc bool
+	width   int
+	height  int
+	filter  filterState
 }
 
 func newSubsModel() subsModel { return subsModel{sortAsc: true} }
 
 func (m subsModel) Update(msg tea.Msg) (subsModel, tea.Cmd) {
-switch msg := msg.(type) {
-case tea.KeyMsg:
-switch msg.String() {
-case "s":
-m.sortCol = (m.sortCol + 1) % subSortCols
-m.render()
-return m, nil
-case "r":
-m.sortAsc = !m.sortAsc
-m.render()
-return m, nil
-}
-}
-return m, nil
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if m.filter.handle(msg) {
+			m.render()
+			return m, nil
+		}
+		switch msg.String() {
+		case "s":
+			m.sortCol = (m.sortCol + 1) % subSortCols
+			m.render()
+			return m, nil
+		case "r":
+			m.sortAsc = !m.sortAsc
+			m.render()
+			return m, nil
+		}
+	}
+	return m, nil
 }
 
-func (m subsModel) View() string { return m.tbl.View() }
+func (m subsModel) View() string {
+	if m.filter.searching {
+		return m.tbl.View() + "\n" + renderSearchBar(m.filter.searchQuery, m.width)
+	}
+	return m.tbl.View()
+}
 
 func (m *subsModel) scrollBy(n int) {
 	if n < 0 {
@@ -76,28 +86,42 @@ cols := []stColumn{
 {Title: "SinceMsg", Width: 9},
 }
 
-sorted := make([]SubInfo, len(m.data))
-copy(sorted, m.data)
-sort.Slice(sorted, func(i, j int) bool {
-a, b := sorted[i], sorted[j]
-var less bool
-switch m.sortCol {
-case subSortTopic:
-less = a.Topic < b.Topic
-case subSortMsgs:
-less = a.MsgRcvd < b.MsgRcvd
-default:
-less = a.Name < b.Name
-}
-if m.sortAsc {
-return less
-}
-return !less
-})
+	// Apply hide-system and search filters.
+	filtered := make([]SubInfo, 0, len(m.data))
+	for _, s := range m.data {
+		if m.filter.hideSystem && isSystem(s.Name) {
+			continue
+		}
+		if !matchesFilter(s.Name, m.filter.searchQuery) {
+			continue
+		}
+		filtered = append(filtered, s)
+	}
 
-	m.sorted = sorted // save for detail lookup
-	rows := make([][]string, 0, len(sorted))
-	for _, s := range sorted {
+	sort.Slice(filtered, func(i, j int) bool {
+		a, b := filtered[i], filtered[j]
+		aSys, bSys := isSystem(a.Name), isSystem(b.Name)
+		if aSys != bSys {
+			return !aSys
+		}
+		var less bool
+		switch m.sortCol {
+		case subSortTopic:
+			less = a.Topic < b.Topic
+		case subSortMsgs:
+			less = a.MsgRcvd < b.MsgRcvd
+		default:
+			less = a.Name < b.Name
+		}
+		if m.sortAsc {
+			return less
+		}
+		return !less
+	})
+
+	m.sorted = filtered // save for detail lookup
+	rows := make([][]string, 0, len(filtered))
+	for _, s := range filtered {
 rows = append(rows, []string{
 nameStyle.Render(s.Name),
 dimStyle.Render(s.SubId),
@@ -108,7 +132,11 @@ dimStyle.Render(fmt.Sprintf("%ds", s.SinceMsg)),
 })
 }
 
-t := newSimpleTable(cols, rows, m.height-2)
+	tableH := m.height - 2
+	if m.filter.searching {
+		tableH--
+	}
+	t := newSimpleTable(cols, rows, tableH)
 if cursor >= len(rows) {
 cursor = len(rows) - 1
 }

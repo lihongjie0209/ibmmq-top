@@ -24,28 +24,38 @@ type queuesModel struct {
 	sortAsc bool
 	width   int
 	height  int
+	filter  filterState
 }
 
 func newQueuesModel() queuesModel { return queuesModel{sortAsc: true} }
 
 func (m queuesModel) Update(msg tea.Msg) (queuesModel, tea.Cmd) {
-switch msg := msg.(type) {
-case tea.KeyMsg:
-switch msg.String() {
-case "s":
-m.sortCol = (m.sortCol + 1) % qSortCols
-m.render()
-return m, nil
-case "r":
-m.sortAsc = !m.sortAsc
-m.render()
-return m, nil
-}
-}
-return m, nil
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if m.filter.handle(msg) {
+			m.render()
+			return m, nil
+		}
+		switch msg.String() {
+		case "s":
+			m.sortCol = (m.sortCol + 1) % qSortCols
+			m.render()
+			return m, nil
+		case "r":
+			m.sortAsc = !m.sortAsc
+			m.render()
+			return m, nil
+		}
+	}
+	return m, nil
 }
 
-func (m queuesModel) View() string { return m.tbl.View() }
+func (m queuesModel) View() string {
+	if m.filter.searching {
+		return m.tbl.View() + "\n" + renderSearchBar(m.filter.searchQuery, m.width)
+	}
+	return m.tbl.View()
+}
 
 func (m *queuesModel) scrollBy(n int) {
 	if n < 0 {
@@ -81,32 +91,47 @@ cols := []stColumn{
 {Title: colHdr("Get/s", qSortGetRate, m.sortCol, m.sortAsc), Width: 7},
 }
 
-sorted := make([]QueueInfo, len(m.data))
-copy(sorted, m.data)
-sort.Slice(sorted, func(i, j int) bool {
-a, b := sorted[i], sorted[j]
-var less bool
-switch m.sortCol {
-case qSortDepth:
-less = a.Depth < b.Depth
-case qSortPct:
-less = pct(a.Depth, a.MaxDepth) < pct(b.Depth, b.MaxDepth)
-case qSortPutRate:
-less = a.PutRate < b.PutRate
-case qSortGetRate:
-less = a.GetRate < b.GetRate
-default:
-less = a.Name < b.Name
-}
-if m.sortAsc {
-return less
-}
-return !less
-})
+	// Apply hide-system and search filters.
+	filtered := make([]QueueInfo, 0, len(m.data))
+	for _, q := range m.data {
+		if m.filter.hideSystem && isSystem(q.Name) {
+			continue
+		}
+		if !matchesFilter(q.Name, m.filter.searchQuery) {
+			continue
+		}
+		filtered = append(filtered, q)
+	}
 
-	m.sorted = sorted // save for detail lookup
-	rows := make([][]string, 0, len(sorted))
-	for _, q := range sorted {
+	sort.Slice(filtered, func(i, j int) bool {
+		a, b := filtered[i], filtered[j]
+		// System objects always sort after non-system objects.
+		aSys, bSys := isSystem(a.Name), isSystem(b.Name)
+		if aSys != bSys {
+			return !aSys
+		}
+		var less bool
+		switch m.sortCol {
+		case qSortDepth:
+			less = a.Depth < b.Depth
+		case qSortPct:
+			less = pct(a.Depth, a.MaxDepth) < pct(b.Depth, b.MaxDepth)
+		case qSortPutRate:
+			less = a.PutRate < b.PutRate
+		case qSortGetRate:
+			less = a.GetRate < b.GetRate
+		default:
+			less = a.Name < b.Name
+		}
+		if m.sortAsc {
+			return less
+		}
+		return !less
+	})
+
+	m.sorted = filtered // save for detail lookup
+	rows := make([][]string, 0, len(filtered))
+	for _, q := range filtered {
 		if q.QType == "REMOTE" {
 			// Usage column: show XmitQueue name (the transmission queue routing target)
 			xmitLabel := "→" + q.XmitQueue
@@ -147,7 +172,11 @@ return !less
 		})
 	}
 
-t := newSimpleTable(cols, rows, m.height-2)
+	tableH := m.height - 2
+	if m.filter.searching {
+		tableH--
+	}
+	t := newSimpleTable(cols, rows, tableH)
 // Restore cursor — clamp to valid range
 if cursor >= len(rows) {
 cursor = len(rows) - 1

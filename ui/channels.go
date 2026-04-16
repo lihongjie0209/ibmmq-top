@@ -17,35 +17,45 @@ chSortCols
 )
 
 type channelsModel struct {
-tbl     simpleTable
-data    []ChannelInfo
-sorted  []ChannelInfo // mirrors last rendered row order for detail lookup
-sortCol int
-sortAsc bool
-width   int
-height  int
+	tbl     simpleTable
+	data    []ChannelInfo
+	sorted  []ChannelInfo // mirrors last rendered row order for detail lookup
+	sortCol int
+	sortAsc bool
+	width   int
+	height  int
+	filter  filterState
 }
 
 func newChannelsModel() channelsModel { return channelsModel{sortAsc: true} }
 
 func (m channelsModel) Update(msg tea.Msg) (channelsModel, tea.Cmd) {
-switch msg := msg.(type) {
-case tea.KeyMsg:
-switch msg.String() {
-case "s":
-m.sortCol = (m.sortCol + 1) % chSortCols
-m.render()
-return m, nil
-case "r":
-m.sortAsc = !m.sortAsc
-m.render()
-return m, nil
-}
-}
-return m, nil
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if m.filter.handle(msg) {
+			m.render()
+			return m, nil
+		}
+		switch msg.String() {
+		case "s":
+			m.sortCol = (m.sortCol + 1) % chSortCols
+			m.render()
+			return m, nil
+		case "r":
+			m.sortAsc = !m.sortAsc
+			m.render()
+			return m, nil
+		}
+	}
+	return m, nil
 }
 
-func (m channelsModel) View() string { return m.tbl.View() }
+func (m channelsModel) View() string {
+	if m.filter.searching {
+		return m.tbl.View() + "\n" + renderSearchBar(m.filter.searchQuery, m.width)
+	}
+	return m.tbl.View()
+}
 
 func (m *channelsModel) scrollBy(n int) {
 	if n < 0 {
@@ -80,30 +90,44 @@ cols := []stColumn{
 {Title: "SinceMsg", Width: 9},
 }
 
-sorted := make([]ChannelInfo, len(m.data))
-copy(sorted, m.data)
-sort.Slice(sorted, func(i, j int) bool {
-a, b := sorted[i], sorted[j]
-var less bool
-switch m.sortCol {
-case chSortStatus:
-less = a.Status < b.Status
-case chSortMsgs:
-less = a.Messages < b.Messages
-case chSortBytes:
-less = a.BytesSent < b.BytesSent
-default:
-less = a.Name < b.Name
-}
-if m.sortAsc {
-return less
-}
-return !less
-})
+	// Apply hide-system and search filters.
+	filtered := make([]ChannelInfo, 0, len(m.data))
+	for _, ch := range m.data {
+		if m.filter.hideSystem && isSystem(ch.Name) {
+			continue
+		}
+		if !matchesFilter(ch.Name, m.filter.searchQuery) {
+			continue
+		}
+		filtered = append(filtered, ch)
+	}
 
-	m.sorted = sorted // save for detail lookup
-	rows := make([][]string, 0, len(sorted))
-	for _, c := range sorted {
+	sort.Slice(filtered, func(i, j int) bool {
+		a, b := filtered[i], filtered[j]
+		aSys, bSys := isSystem(a.Name), isSystem(b.Name)
+		if aSys != bSys {
+			return !aSys
+		}
+		var less bool
+		switch m.sortCol {
+		case chSortStatus:
+			less = a.Status < b.Status
+		case chSortMsgs:
+			less = a.Messages < b.Messages
+		case chSortBytes:
+			less = a.BytesSent < b.BytesSent
+		default:
+			less = a.Name < b.Name
+		}
+		if m.sortAsc {
+			return less
+		}
+		return !less
+	})
+
+	m.sorted = filtered // save for detail lookup
+	rows := make([][]string, 0, len(filtered))
+	for _, c := range filtered {
 rows = append(rows, []string{
 nameStyle.Render(c.Name),
 chlTypeCell(c.Type),
@@ -116,14 +140,18 @@ dimStyle.Render(fmt.Sprintf("%ds", c.SinceMsg)),
 })
 }
 
-t := newSimpleTable(cols, rows, m.height-2)
-if cursor >= len(rows) {
-cursor = len(rows) - 1
-}
-if cursor >= 0 {
-t.SetCursor(cursor)
-}
-m.tbl = t
+	tableH := m.height - 2
+	if m.filter.searching {
+		tableH--
+	}
+	t := newSimpleTable(cols, rows, tableH)
+	if cursor >= len(rows) {
+		cursor = len(rows) - 1
+	}
+	if cursor >= 0 {
+		t.SetCursor(cursor)
+	}
+	m.tbl = t
 }
 
 func fmtBytes(b int64) string {
